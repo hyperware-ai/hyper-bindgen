@@ -1,0 +1,19 @@
+[package]
+name = "hyper-bindgen"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "A tool to generate WIT files from Rust hyperprocess implementations"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
+walkdir = "2.3"
+toml = "0.7"
+clap = { version = "4.4", features = ["derive"] }
+
+
+[[bin]]
+name = "hyper-bindgen"
+path = "src/main.rs"
