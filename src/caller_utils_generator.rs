@@ -1,39 +1,3 @@
-// Find the world name in the world WIT file
-fn find_world_name(api_dir: &Path) -> Result<String> {
-    // Look for world definition files
-    for entry in WalkDir::new(api_dir)
-        .max_depth(1)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        let path = entry.path();
-        
-        if path.is_file() && path.extension().map_or(false, |ext| ext == "wit") {
-            if let Ok(content) = fs::read_to_string(path) {
-                if content.contains("world ") {
-                    println!("Analyzing world definition file: {}", path.display());
-                    
-                    // Extract the world name
-                    let lines: Vec<&str> = content.lines().collect();
-                    
-                    if let Some(world_line) = lines.iter().find(|line| line.trim().starts_with("world ")) {
-                        println!("World line: {}", world_line);
-                        
-                        if let Some(world_name) = world_line.trim().split_whitespace().nth(1) {
-                            let clean_name = world_name.trim_end_matches(" {");
-                            println!("Extracted world name: {}", clean_name);
-                            return Ok(clean_name.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // If no world name is found, we should fail
-    bail!("No world name found in any WIT file. Cannot generate caller-utils without a world name.")
-}
-
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::fs;
@@ -62,6 +26,74 @@ pub fn to_pascal_case(s: &str) -> String {
     }
     
     result
+}
+
+// Find the world name in the world WIT file, prioritizing types-prefixed worlds
+fn find_world_name(api_dir: &Path) -> Result<String> {
+    let mut regular_world_name = None;
+    let mut types_world_name = None;
+    
+    // Look for world definition files
+    for entry in WalkDir::new(api_dir)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "wit") {
+            if let Ok(content) = fs::read_to_string(path) {
+                if content.contains("world ") {
+                    println!("Analyzing world definition file: {}", path.display());
+                    
+                    // Extract the world name
+                    let lines: Vec<&str> = content.lines().collect();
+                    
+                    if let Some(world_line) = lines.iter().find(|line| line.trim().starts_with("world ")) {
+                        println!("World line: {}", world_line);
+                        
+                        if let Some(world_name) = world_line.trim().split_whitespace().nth(1) {
+                            let clean_name = world_name.trim_end_matches(" {");
+                            println!("Extracted world name: {}", clean_name);
+                            
+                            // Check if this is a types-prefixed world
+                            if clean_name.starts_with("types-") {
+                                types_world_name = Some(clean_name.to_string());
+                                println!("Found types world: {}", clean_name);
+                            } else {
+                                regular_world_name = Some(clean_name.to_string());
+                                println!("Found regular world: {}", clean_name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Prioritize types-prefixed world if found
+    if let Some(types_name) = types_world_name {
+        return Ok(types_name);
+    }
+    
+    // If no types-prefixed world found, check if we have a regular world
+    if let Some(regular_name) = regular_world_name {
+        // Check if there's a corresponding types-prefixed world file
+        let types_name = format!("types-{}", regular_name);
+        let types_file = api_dir.join(format!("{}.wit", types_name));
+        
+        if types_file.exists() {
+            println!("Found types world from file: {}", types_name);
+            return Ok(types_name);
+        }
+        
+        // Fall back to regular world but print a warning
+        println!("Warning: No types- world found, using regular world: {}", regular_name);
+        return Ok(regular_name);
+    }
+    
+    // If no world name is found, we should fail
+    bail!("No world name found in any WIT file. Cannot generate caller-utils without a world name.")
 }
 
 // Convert WIT type to Rust type
@@ -358,7 +390,7 @@ fn generate_async_function(signature: &SignatureStruct) -> String {
     // Format JSON parameters correctly
     let json_params = if param_names.is_empty() {
         // No parameters case
-        format!("json!({{\"{}\": {{}}}}", pascal_function_name)
+        format!("json!({{\"{}\" : {{}}}})", pascal_function_name)
     } else if param_names.len() == 1 {
         // Single parameter case
         format!("json!({{\"{}\": {}}})", pascal_function_name, param_names[0])
@@ -393,7 +425,7 @@ fn create_caller_utils_crate(api_dir: &Path, base_dir: &Path) -> Result<()> {
     fs::create_dir_all(caller_utils_dir.join("src"))?;
     println!("Created project directory structure");
     
-    // Create Cargo.toml
+    // Create Cargo.toml with updated dependencies
     let cargo_toml = r#"[package]
 name = "caller-utils"
 version = "0.1.0"
@@ -407,12 +439,11 @@ process_macros = "0.1.0"
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-wit_parser = { path = "../crates/wit_parser" }
+hyperware_app_common = { git = "https://github.com/hyperware-ai/hyperprocess-macro" }
 once_cell = "1.20.2"
-hyperware_app_common = { path = "../crates/hyperware_app_common" }
 futures = "0.3"
 uuid = { version = "1.0" }
-
+wit-bindgen = "0.41.0"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -423,8 +454,9 @@ crate-type = ["cdylib", "lib"]
     
     println!("Created Cargo.toml for caller-utils");
     
-    // Get the world name
+    // Get the world name (preferably the types- version)
     let world_name = find_world_name(api_dir)?;
+    println!("Using world name for code generation: {}", world_name);
     
     // Get all interfaces from the world file
     let interface_imports = find_interfaces_in_world(api_dir)?;
@@ -511,9 +543,15 @@ crate-type = ["cdylib", "lib"]
     // Create single lib.rs with all modules inline
     let mut lib_rs = String::new();
     
-    // First add the wit_parser macro with the correct world name
-    lib_rs.push_str(&format!("use wit_parser::wit_parser;\n"));
-    lib_rs.push_str(&format!("wit_parser!(\"api/{}.wit\");\n\n", world_name));
+    // Updated wit_bindgen usage with explicit world name
+    lib_rs.push_str("use serde::{Deserialize, Serialize};\n");
+    lib_rs.push_str("use process_macros::SerdeJsonInto;\n\n");
+    lib_rs.push_str("wit_bindgen::generate!({\n");
+    lib_rs.push_str("    path: \"target/wit\",\n");
+    lib_rs.push_str(&format!("    world: \"{}\",\n", world_name));
+    lib_rs.push_str("    generate_unused_types: true,\n");
+    lib_rs.push_str("    additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],\n");
+    lib_rs.push_str("});\n\n");
     
     lib_rs.push_str("/// Generated caller utilities for RPC function stubs\n\n");
     
@@ -522,7 +560,6 @@ crate-type = ["cdylib", "lib"]
     lib_rs.push_str("pub use hyperware_app_common::send;\n");
     lib_rs.push_str("use hyperware_process_lib::Address;\n");
     lib_rs.push_str("use serde_json::json;\n\n");
-
     
     // Add interface use statements
     if !interface_use_statements.is_empty() {
