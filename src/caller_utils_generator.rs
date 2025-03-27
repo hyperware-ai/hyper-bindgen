@@ -96,19 +96,38 @@ fn find_world_name(api_dir: &Path) -> Result<String> {
     bail!("No world name found in any WIT file. Cannot generate caller-utils without a world name.")
 }
 
-// Convert WIT type to Rust type
+// Convert WIT type to Rust type - IMPROVED with more Rust primitives
 fn wit_type_to_rust(wit_type: &str) -> String {
     match wit_type {
+        // Integer types
+        "s8" => "i8".to_string(),
+        "u8" => "u8".to_string(),
+        "s16" => "i16".to_string(),
+        "u16" => "u16".to_string(),
         "s32" => "i32".to_string(),
         "u32" => "u32".to_string(),
         "s64" => "i64".to_string(),
         "u64" => "u64".to_string(),
+        // Size types
+        "usize" => "usize".to_string(),
+        "isize" => "isize".to_string(),
+        // Floating point types
         "f32" => "f32".to_string(),
         "f64" => "f64".to_string(),
+        // Other primitive types
         "string" => "String".to_string(),
+        "str" => "&str".to_string(),
+        "char" => "char".to_string(),
         "bool" => "bool".to_string(),
         "unit" => "()".to_string(),
+        // Special types
         "address" => "WitAddress".to_string(),
+        // Common primitives that might be written differently in WIT
+        "i8" => "i8".to_string(),
+        "i16" => "i16".to_string(),
+        "i32" => "i32".to_string(),
+        "i64" => "i64".to_string(),
+        // Collection types with generics
         t if t.starts_with("list<") => {
             let inner_type = &t[5..t.len() - 1];
             format!("Vec<{}>", wit_type_to_rust(inner_type))
@@ -116,6 +135,16 @@ fn wit_type_to_rust(wit_type: &str) -> String {
         t if t.starts_with("option<") => {
             let inner_type = &t[7..t.len() - 1];
             format!("Option<{}>", wit_type_to_rust(inner_type))
+        },
+        t if t.starts_with("result<") => {
+            let inner_part = &t[7..t.len() - 1];
+            if let Some(comma_pos) = inner_part.find(',') {
+                let ok_type = &inner_part[..comma_pos].trim();
+                let err_type = &inner_part[comma_pos + 1..].trim();
+                format!("Result<{}, {}>", wit_type_to_rust(ok_type), wit_type_to_rust(err_type))
+            } else {
+                format!("Result<{}, ()>", wit_type_to_rust(inner_part))
+            }
         },
         t if t.starts_with("tuple<") => {
             let inner_types = &t[6..t.len() - 1];
@@ -125,22 +154,52 @@ fn wit_type_to_rust(wit_type: &str) -> String {
                 .collect();
             format!("({})", rust_types.join(", "))
         },
+        // Handle map type if present
+        t if t.starts_with("map<") => {
+            let inner_part = &t[4..t.len() - 1];
+            if let Some(comma_pos) = inner_part.find(',') {
+                let key_type = &inner_part[..comma_pos].trim();
+                let value_type = &inner_part[comma_pos + 1..].trim();
+                format!("HashMap<{}, {}>", wit_type_to_rust(key_type), wit_type_to_rust(value_type))
+            } else {
+                // Fallback for malformed map type
+                format!("HashMap<String, {}>", wit_type_to_rust(inner_part))
+            }
+        },
         // Custom types (in kebab-case) need to be converted to PascalCase
         _ => to_pascal_case(wit_type).to_string(),
     }
 }
 
-// Generate default value for Rust type
+// Generate default value for Rust type - IMPROVED with additional types
 fn generate_default_value(rust_type: &str) -> String {
     match rust_type {
-        "i32" | "u32" | "i64" | "u64" => "0".to_string(),
+        // Integer types
+        "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "isize" | "usize" => "0".to_string(),
+        // Floating point types
         "f32" | "f64" => "0.0".to_string(),
+        // String types
         "String" => "String::new()".to_string(),
+        "&str" => "\"\"".to_string(),
+        // Other primitive types
         "bool" => "false".to_string(),
+        "char" => "'\\0'".to_string(),
         "()" => "()".to_string(),
+        // Collection types
         t if t.starts_with("Vec<") => "Vec::new()".to_string(),
         t if t.starts_with("Option<") => "None".to_string(),
+        t if t.starts_with("Result<") => {
+            // For Result, default to Ok with the default value of the success type
+            if let Some(success_type_end) = t.find(',') {
+                let success_type = &t[7..success_type_end];
+                format!("Ok({})", generate_default_value(success_type))
+            } else {
+                "Ok(())".to_string()
+            }
+        },
+        t if t.starts_with("HashMap<") => "HashMap::new()".to_string(),
         t if t.starts_with("(") => {
+            // Generate default tuple with default values for each element
             let inner_part = t.trim_start_matches('(').trim_end_matches(')');
             let parts: Vec<_> = inner_part.split(", ").collect();
             let default_values: Vec<_> = parts.iter()
@@ -434,7 +493,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
-hyperware_process_lib = { version = "1.0.2", features = ["logging"] }
+hyperware_process_lib = { version = "1.0.4", features = ["logging"] }
 process_macros = "0.1.0"
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
@@ -545,7 +604,8 @@ crate-type = ["cdylib", "lib"]
     
     // Updated wit_bindgen usage with explicit world name
     lib_rs.push_str("use serde::{Deserialize, Serialize};\n");
-    lib_rs.push_str("use process_macros::SerdeJsonInto;\n\n");
+    lib_rs.push_str("use process_macros::SerdeJsonInto;\n");
+    lib_rs.push_str("use std::collections::HashMap;\n\n");
     lib_rs.push_str("wit_bindgen::generate!({\n");
     lib_rs.push_str("    path: \"target/wit\",\n");
     lib_rs.push_str(&format!("    world: \"{}\",\n", world_name));

@@ -676,34 +676,236 @@ fn clean_api_directory(api_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-// Find all API directories recursively
-fn find_api_directories(base_dir: &Path) -> Vec<PathBuf> {
+// Find all API directories recursively within the test folder
+fn find_test_api_directories(base_dir: &Path) -> Vec<PathBuf> {
     let mut api_dirs = Vec::new();
-    println!("Scanning for API directories in {}", base_dir.display());
+    let test_dir = base_dir.join("test");
     
-    for entry in WalkDir::new(base_dir)
+    if !test_dir.exists() || !test_dir.is_dir() {
+        println!("No test folder found in {}", base_dir.display());
+        return api_dirs;
+    }
+    
+    println!("Recursively scanning for API directories within test folder: {}", test_dir.display());
+    
+    for entry in WalkDir::new(test_dir)
         .into_iter()
         .filter_map(Result::ok)
     {
         let path = entry.path();
         
         if path.is_dir() && path.file_name().map_or(false, |name| name == "api") {
-            println!("Found API directory: {}", path.display());
+            println!("Found API directory within test folder: {}", path.display());
             api_dirs.push(path.to_path_buf());
         }
     }
     
-    println!("Found {} API directories", api_dirs.len());
+    if api_dirs.is_empty() {
+        println!("No API directories found within test folder");
+    } else {
+        println!("Found {} API directories within test folder", api_dirs.len());
+    }
+    
     api_dirs
 }
 
-// Generate WIT files from Rust code for all API directories
+// Write interface files to an API directory
+fn write_interface_files(
+    api_dir: &Path,
+    interface_contents: &HashMap<String, String>,
+    world_names: &HashSet<String>,
+    world_imports: &Vec<String>,
+    is_test: bool, // Flag to indicate if this is for a test API directory
+) -> Result<()> {
+    println!("Writing interface files to {}", api_dir.display());
+    
+    // Make sure the API directory exists
+    if !api_dir.exists() {
+        fs::create_dir_all(api_dir)
+            .with_context(|| format!("Failed to create API directory: {}", api_dir.display()))?;
+    }
+    
+    // Write all interface files
+    for (interface_name, content) in interface_contents {
+        let interface_file = api_dir.join(format!("{}.wit", interface_name));
+        println!("Writing interface file {} to {}", interface_name, interface_file.display());
+        
+        fs::write(&interface_file, content)
+            .with_context(|| format!("Failed to write interface file: {}", interface_file.display()))?;
+        
+        println!("Successfully wrote interface file: {}", interface_name);
+    }
+    
+    // Look for existing world definition files and update them
+    let mut found_existing_worlds = HashSet::new();
+    
+    println!("Looking for existing world definition files in {}", api_dir.display());
+    for entry in WalkDir::new(api_dir)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "wit") {
+            println!("Checking WIT file: {}", path.display());
+            
+            if let Ok(content) = fs::read_to_string(path) {
+                if content.contains("world ") {
+                    println!("Found world definition file");
+                    
+                    // Extract the world name
+                    let lines: Vec<&str> = content.lines().collect();
+                    
+                    if let Some(world_line) = lines.iter().find(|line| line.trim().starts_with("world ")) {
+                        println!("World line: {}", world_line);
+                        
+                        if let Some(world_name) = world_line.trim().split_whitespace().nth(1) {
+                            let clean_name = world_name.trim_end_matches(" {");
+                            println!("Extracted world name: {}", clean_name);
+                            
+                            // If this is one of our collected world names, update it
+                            if world_names.contains(clean_name) {
+                                found_existing_worlds.insert(clean_name.to_string());
+                                
+                                // Create updated world content with process-v1 include
+                                let world_content = if is_test {
+                                    // For test API, add prefix to world name and import tester line
+                                    let test_world_name = format!("test-{}", clean_name);
+                                    format!(
+                                        "world {} {{\n    import tester;\n{}\n    include process-v1;\n}}",
+                                        test_world_name,
+                                        world_imports.join("\n")
+                                    )
+                                } else {
+                                    // Standard world content
+                                    format!(
+                                        "world {} {{\n{}\n    include process-v1;\n}}",
+                                        clean_name,
+                                        world_imports.join("\n")
+                                    )
+                                };
+                                
+                                if is_test {
+                                    // For test API, write to a new file with test- prefix
+                                    let test_world_name = format!("test-{}", clean_name);
+                                    let test_world_file = api_dir.join(format!("{}.wit", test_world_name));
+                                    println!("Writing test world definition to {}", test_world_file.display());
+                                    fs::write(test_world_file.clone(), world_content)
+                                        .with_context(|| format!("Failed to write test world file: {}", test_world_file.display()))?;
+                                } else {
+                                    // Standard API, update existing file
+                                    println!("Writing updated world definition to {}", path.display());
+                                    fs::write(path, world_content)
+                                        .with_context(|| format!("Failed to write updated world file: {}", path.display()))?;
+                                }
+                                
+                                println!("Successfully updated world definition");
+                                
+                                // Also create or update the types world
+                                let types_world_name = if is_test {
+                                    format!("types-test-{}", clean_name)
+                                } else {
+                                    format!("types-{}", clean_name)
+                                };
+                                let types_world_file = api_dir.join(format!("{}.wit", types_world_name));
+                                
+                                // Create types world content with lib include
+                                let world_name_in_content = if is_test {
+                                    format!("types-test-{}", clean_name)
+                                } else {
+                                    format!("types-{}", clean_name)
+                                };
+                                let types_world_content = format!(
+                                    "world {} {{\n{}\n    include lib;\n}}",
+                                    world_name_in_content,
+                                    world_imports.join("\n")
+                                );
+                                
+                                println!("Writing types world definition to {}", types_world_file.display());
+                                fs::write(types_world_file.clone(), types_world_content)
+                                    .with_context(|| format!("Failed to write types world file: {}", types_world_file.display()))?;
+                                
+                                println!("Successfully created/updated types world definition");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // For any world names that weren't found in existing files, create new ones
+    let missing_worlds: Vec<&String> = world_names.iter()
+        .filter(|name| !found_existing_worlds.contains(*name))
+        .collect();
+    
+    for world_name in missing_worlds {
+        println!("Creating new world definition for: {}", world_name);
+        
+        // Create world content with process-v1 include
+        let (world_file_name, world_declaration_name) = if is_test {
+            // For test API, add test- prefix to both file name and world declaration
+            let test_name = format!("test-{}", world_name);
+            (test_name.clone(), test_name)
+        } else {
+            // Standard API, use world_name as is
+            (world_name.to_string(), world_name.to_string())
+        };
+        
+        let world_content = if is_test {
+            // For test API, add import tester line
+            format!(
+                "world {} {{\n    import tester;\n{}\n    include process-v1;\n}}",
+                world_declaration_name,
+                world_imports.join("\n")
+            )
+        } else {
+            // Standard world content
+            format!(
+                "world {} {{\n{}\n    include process-v1;\n}}",
+                world_declaration_name,
+                world_imports.join("\n")
+            )
+        };
+        
+        let world_file = api_dir.join(format!("{}.wit", world_file_name));
+        println!("Writing world definition to {}", world_file.display());
+        
+        fs::write(world_file.clone(), world_content)
+            .with_context(|| format!("Failed to write world file: {}", world_file.display()))?;
+        
+        println!("Successfully created world definition");
+        
+        // Also create the types world
+        let types_world_name = if is_test {
+            format!("types-test-{}", world_name)
+        } else {
+            format!("types-{}", world_name)
+        };
+        let types_world_file = api_dir.join(format!("{}.wit", types_world_name));
+        
+        // Create types world content with lib include
+        let types_world_content = format!(
+            "world {} {{\n{}\n    include lib;\n}}",
+            types_world_name,
+            world_imports.join("\n")
+        );
+        
+        println!("Writing types world definition to {}", types_world_file.display());
+        fs::write(types_world_file.clone(), types_world_content)
+            .with_context(|| format!("Failed to write types world file: {}", types_world_file.display()))?;
+        
+        println!("Successfully created types world definition");
+    }
+    
+    Ok(())
+}
+
+// Generate WIT files from Rust code for top-level API directory and test/api directories if they exist
 pub fn generate_wit_files(base_dir: &Path, top_level_api_dir: &Path) -> Result<(Vec<PathBuf>, Vec<String>)> {
     // Clean only the top-level API directory
     clean_api_directory(top_level_api_dir)?;
-    
-    // Find all API directories recursively
-    let api_dirs = find_api_directories(base_dir);
     
     // Find all relevant Rust projects
     let projects = find_rust_projects(base_dir);
@@ -747,139 +949,25 @@ pub fn generate_wit_files(base_dir: &Path, top_level_api_dir: &Path) -> Result<(
     
     println!("Found world names: {:?}", world_names);
     
-    // Write interface files to all API directories
-    for api_dir in &api_dirs {
-        println!("Writing interface files to {}", api_dir.display());
-        
-        // Make sure the API directory exists
-        if !api_dir.exists() {
-            fs::create_dir_all(api_dir)
-                .with_context(|| format!("Failed to create API directory: {}", api_dir.display()))?;
+    // First, write interface files to the top-level API directory
+    write_interface_files(top_level_api_dir, &interface_contents, &world_names, &world_imports, false)?;
+    
+    // Find and process all API directories within test folder
+    let test_api_dirs = find_test_api_directories(base_dir);
+    let has_test_dirs = !test_api_dirs.is_empty();
+    
+    // Check if any test API directories were found
+    if has_test_dirs {
+        // Process each found test API directory
+        for test_api_dir in &test_api_dirs {
+            println!("Processing test API directory: {}", test_api_dir.display());
+            clean_api_directory(test_api_dir)?;
+            write_interface_files(test_api_dir, &interface_contents, &world_names, &world_imports, true)?;
         }
-        
-        // Write all interface files
-        for (interface_name, content) in &interface_contents {
-            let interface_file = api_dir.join(format!("{}.wit", interface_name));
-            println!("Writing interface file {} to {}", interface_name, interface_file.display());
-            
-            fs::write(&interface_file, content)
-                .with_context(|| format!("Failed to write interface file: {}", interface_file.display()))?;
-            
-            println!("Successfully wrote interface file: {}", interface_name);
-        }
-        
-        // Look for existing world definition files and update them
-        let mut found_existing_worlds = HashSet::new();
-        
-        println!("Looking for existing world definition files in {}", api_dir.display());
-        for entry in WalkDir::new(api_dir)
-            .max_depth(1)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            let path = entry.path();
-            
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "wit") {
-                println!("Checking WIT file: {}", path.display());
-                
-                if let Ok(content) = fs::read_to_string(path) {
-                    if content.contains("world ") {
-                        println!("Found world definition file");
-                        
-                        // Extract the world name
-                        let lines: Vec<&str> = content.lines().collect();
-                        
-                        if let Some(world_line) = lines.iter().find(|line| line.trim().starts_with("world ")) {
-                            println!("World line: {}", world_line);
-                            
-                            if let Some(world_name) = world_line.trim().split_whitespace().nth(1) {
-                                let clean_name = world_name.trim_end_matches(" {");
-                                println!("Extracted world name: {}", clean_name);
-                                
-                                // If this is one of our collected world names, update it
-                                if world_names.contains(clean_name) {
-                                    found_existing_worlds.insert(clean_name.to_string());
-                                    
-                                    // Create updated world content with process-v1 include
-                                    let world_content = format!(
-                                        "world {} {{\n{}\n    include process-v1;\n}}",
-                                        clean_name,
-                                        world_imports.join("\n") // No comma separator because each import has a semicolon
-                                    );
-                                    
-                                    println!("Writing updated world definition to {}", path.display());
-                                    // Write the updated world file
-                                    fs::write(path, world_content)
-                                        .with_context(|| format!("Failed to write updated world file: {}", path.display()))?;
-                                    
-                                    println!("Successfully updated world definition");
-                                    
-                                    // Also create or update the types world
-                                    let types_world_name = format!("types-{}", clean_name);
-                                    let types_world_file = api_dir.join(format!("{}.wit", types_world_name));
-                                    
-                                    // Create types world content with lib include
-                                    let types_world_content = format!(
-                                        "world {} {{\n{}\n    include lib;\n}}",
-                                        types_world_name,
-                                        world_imports.join("\n")
-                                    );
-                                    
-                                    println!("Writing types world definition to {}", types_world_file.display());
-                                    fs::write(types_world_file.clone(), types_world_content)
-                                        .with_context(|| format!("Failed to write types world file: {}", types_world_file.display()))?;
-                                    
-                                    println!("Successfully created/updated types world definition");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // For any world names that weren't found in existing files, create new ones
-        let missing_worlds: Vec<&String> = world_names.iter()
-            .filter(|name| !found_existing_worlds.contains(*name))
-            .collect();
-        
-        for world_name in missing_worlds {
-            println!("Creating new world definition for: {}", world_name);
-            
-            // Create world content with process-v1 include
-            let world_content = format!(
-                "world {} {{\n{}\n    include process-v1;\n}}",
-                world_name,
-                world_imports.join("\n") // No comma separator because each import has a semicolon
-            );
-            
-            let world_file = api_dir.join(format!("{}.wit", world_name));
-            println!("Writing world definition to {}", world_file.display());
-            
-            fs::write(&world_file, world_content)
-                .with_context(|| format!("Failed to write world file: {}", world_file.display()))?;
-            
-            println!("Successfully created world definition");
-            
-            // Also create the types world
-            let types_world_name = format!("types-{}", world_name);
-            let types_world_file = api_dir.join(format!("{}.wit", types_world_name));
-            
-            // Create types world content with lib include
-            let types_world_content = format!(
-                "world {} {{\n{}\n    include lib;\n}}",
-                types_world_name,
-                world_imports.join("\n")
-            );
-            
-            println!("Writing types world definition to {}", types_world_file.display());
-            fs::write(types_world_file.clone(), types_world_content)
-                .with_context(|| format!("Failed to write types world file: {}", types_world_file.display()))?;
-            
-            println!("Successfully created types world definition");
-        }
+    } else {
+        println!("No API directories found within test folder, skipping test-specific WIT generation");
     }
     
-    println!("WIT files generated successfully in all API directories.");
+    println!("WIT files generated successfully.");
     Ok((processed_projects, interfaces))
 }
