@@ -602,10 +602,7 @@ crate-type = ["cdylib", "lib"]
     // Create single lib.rs with all modules inline
     let mut lib_rs = String::new();
     
-    // Updated wit_bindgen usage with explicit world name
-    lib_rs.push_str("use serde::{Deserialize, Serialize};\n");
-    lib_rs.push_str("use process_macros::SerdeJsonInto;\n");
-    lib_rs.push_str("use std::collections::HashMap;\n\n");
+    // Updated wit_bindgen usage with explicit world name - FIXED: Removed unused imports
     lib_rs.push_str("wit_bindgen::generate!({\n");
     lib_rs.push_str("    path: \"target/wit\",\n");
     lib_rs.push_str(&format!("    world: \"{}\",\n", world_name));
