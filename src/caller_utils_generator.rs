@@ -585,17 +585,21 @@ crate-type = ["cdylib", "lib"]
         }
     }
     
-    // Create specific import statements for each interface's types
+    // Create import statements for each interface using "hyperware::process::{interface_name}::*"
+    // Use a HashSet to track which interfaces we've already processed to avoid duplicates
+    let mut processed_interfaces = std::collections::HashSet::new();
     let mut interface_use_statements = Vec::new();
+    
     for interface_name in &interface_imports {
-        if let Some(types) = interface_types.get(interface_name) {
-            // Create specific imports for each type
-            for type_name in types {
-                let pascal_type = to_pascal_case(type_name);
-                interface_use_statements.push(
-                    format!("pub use crate::wit_custom::{};", pascal_type)
-                );
-            }
+        // Convert to snake case for module name
+        let snake_interface_name = to_snake_case(interface_name);
+        
+        // Only add the import if we haven't processed this interface yet
+        if processed_interfaces.insert(snake_interface_name.clone()) {
+            // Create wildcard import for this interface
+            interface_use_statements.push(
+                format!("pub use crate::hyperware::process::{}::*;", snake_interface_name)
+            );
         }
     }
     
@@ -620,7 +624,7 @@ crate-type = ["cdylib", "lib"]
     
     // Add interface use statements
     if !interface_use_statements.is_empty() {
-        lib_rs.push_str("// Import specific types from each interface\n");
+        lib_rs.push_str("// Import types from each interface\n");
         for use_stmt in interface_use_statements {
             lib_rs.push_str(&format!("{}\n", use_stmt));
         }
