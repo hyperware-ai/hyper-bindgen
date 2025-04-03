@@ -842,6 +842,17 @@ pub fn generate_wit_files(base_dir: &Path, api_dir: &Path) -> Result<(Vec<PathBu
                     if let Some(world_name) = world_name {
                         println!("Extracted world name: {}", world_name);
                         
+                        // Determine the include line based on world name
+                        // If world name starts with "types-", use "include lib;" instead
+                        if world_name.starts_with("types-") {
+                            include_line = "    include lib;".to_string();
+                        } else {
+                            // Keep existing include or default to process-v1
+                            if !include_line.contains("include ") {
+                                include_line = "    include process-v1;".to_string();
+                            }
+                        }
+                        
                         // Combine existing imports with new imports
                         let mut all_imports = existing_imports.clone();
                         
@@ -904,11 +915,19 @@ pub fn generate_wit_files(base_dir: &Path, api_dir: &Path) -> Result<(Vec<PathBu
                 }
             })
             .collect();
+        
+        // Determine include based on world name
+        let include_line = if default_world.starts_with("types-") {
+            "include lib;"
+        } else {
+            "include process-v1;"
+        };
             
         let world_content = format!(
-            "world {} {{\n{}\n    include process-v1;\n}}",
+            "world {} {{\n{}\n    {}\n}}",
             default_world,
-            imports_with_indent.join("\n")
+            imports_with_indent.join("\n"),
+            include_line
         );
         
         let world_file = api_dir.join(format!("{}.wit", default_world));
