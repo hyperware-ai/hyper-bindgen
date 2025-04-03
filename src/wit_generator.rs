@@ -148,15 +148,15 @@ fn rust_type_to_wit(ty: &Type, used_types: &mut HashSet<String>) -> Result<Strin
                                 (args.args.first(), args.args.get(1)) {
                                 let key_type = rust_type_to_wit(key_ty, used_types)?;
                                 let val_type = rust_type_to_wit(val_ty, used_types)?;
-                                Ok(format!("record<{}, {}>", key_type, val_type))
+                                Ok(format!("map<{}, {}>", key_type, val_type))
                             } else {
-                                Ok("record<string, any>".to_string())
+                                Ok("map<string, any>".to_string())
                             }
                         } else {
-                            Ok("record<string, any>".to_string())
+                            Ok("map<string, any>".to_string())
                         }
                     } else {
-                        Ok("record<string, any>".to_string())
+                        Ok("map<string, any>".to_string())
                     }
                 }
                 custom => {
