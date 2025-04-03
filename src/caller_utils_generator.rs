@@ -398,7 +398,7 @@ fn generate_async_function(signature: &SignatureStruct) -> String {
     // Wrap the return type in SendResult
     let wrapped_return_type = format!("SendResult<{}>", return_type);
     
-    // For HTTP endpoints, just return a default implementation for now
+    // For HTTP endpoints, generate commented-out implementation
     if signature.attr_type == "http" {
         let default_value = generate_default_value(&return_type);
         
@@ -436,7 +436,7 @@ fn generate_async_function(signature: &SignatureStruct) -> String {
         };
         
         return format!(
-            "/// Generated stub for `{}` {} RPC call\npub async fn {}({}) -> {} {{\n    // TODO: Implement HTTP endpoint\n    SendResult::Success({})\n}}",
+            "/// Generated stub for `{}` {} RPC call\n/// HTTP endpoint - uncomment to implement\n// pub async fn {}({}) -> {} {{\n//     // TODO: Implement HTTP endpoint\n//     SendResult::Success({})\n// }}",
             signature.function_name,
             signature.attr_type,
             full_function_name,

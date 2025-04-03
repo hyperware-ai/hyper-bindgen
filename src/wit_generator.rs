@@ -823,7 +823,6 @@ pub fn generate_wit_files(base_dir: &Path, api_dir: &Path) -> Result<(Vec<PathBu
                     let lines: Vec<&str> = content.lines().collect();
                     let mut world_name = None;
                     let mut existing_imports = Vec::new();
-                    let mut found_imports = false;
                     let mut include_line = "    include process-v1;".to_string();
                     
                     for line in &lines {
@@ -834,7 +833,6 @@ pub fn generate_wit_files(base_dir: &Path, api_dir: &Path) -> Result<(Vec<PathBu
                                 world_name = Some(name.trim_end_matches(" {").to_string());
                             }
                         } else if trimmed.starts_with("import ") {
-                            found_imports = true;
                             existing_imports.push(trimmed.to_string());
                         } else if trimmed.starts_with("include ") {
                             include_line = trimmed.to_string();
@@ -854,15 +852,21 @@ pub fn generate_wit_files(base_dir: &Path, api_dir: &Path) -> Result<(Vec<PathBu
                             }
                         }
                         
-                        // If we didn't find any imports but we have the include, create proper format
-                        let imports_section = if found_imports {
-                            all_imports.join("\n")
-                        } else {
-                            // Add 4 spaces of indentation to each import
-                            all_imports.join("\n")
-                        };
+                        // Make sure all imports have proper indentation
+                        let all_imports_with_indent: Vec<String> = all_imports
+                            .iter()
+                            .map(|import| {
+                                if import.starts_with("    ") {
+                                    import.clone()
+                                } else {
+                                    format!("    {}", import.trim())
+                                }
+                            })
+                            .collect();
                         
-                        // Create updated world content
+                        let imports_section = all_imports_with_indent.join("\n");
+                        
+                        // Create updated world content with proper indentation
                         let world_content = format!(
                             "world {} {{\n{}\n    {}\n}}",
                             world_name,
@@ -889,11 +893,22 @@ pub fn generate_wit_files(base_dir: &Path, api_dir: &Path) -> Result<(Vec<PathBu
         let default_world = "async-app-template-dot-os-v0";
         println!("No existing world definitions found, creating default with name: {}", default_world);
         
-        // Create world content with process-v1 include
+        // Create world content with process-v1 include and proper indentation for imports
+        let imports_with_indent: Vec<String> = new_imports
+            .iter()
+            .map(|import| {
+                if import.starts_with("    ") {
+                    import.clone()
+                } else {
+                    format!("    {}", import.trim())
+                }
+            })
+            .collect();
+            
         let world_content = format!(
             "world {} {{\n{}\n    include process-v1;\n}}",
             default_world,
-            new_imports.join("\n")
+            imports_with_indent.join("\n")
         );
         
         let world_file = api_dir.join(format!("{}.wit", default_world));
