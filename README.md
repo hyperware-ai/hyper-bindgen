@@ -1,5 +1,7 @@
 # Hyper-Bindgen
 
+STATUS: This repo has been brought into https://github.com/hyperware-ai/kit
+
 Automates the creation of WIT (WebAssembly Interface Type) files and RPC stubs for Hyperware processes.
 
 ## Installation
